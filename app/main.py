@@ -1,15 +1,32 @@
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, File, Form, Request, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.errors import AssetNotFoundError, ProviderTimeoutError
+from app.documents import InMemoryDocumentStore, ingest_document
+from app.errors import (
+    AssetNotFoundError,
+    DocumentNotFoundError,
+    InsufficientEvidenceError,
+    ProviderTimeoutError,
+    UnsupportedDocumentError,
+)
 from app.observability import InMemoryTraceStore, finish_trace, start_trace
-from app.schemas import AnalysisResult, AssetRequest, AnalysisTrace, ObservabilitySummary, RunStatus
+from app.schemas import (
+    AnalysisResult,
+    AnalysisTrace,
+    AssetRequest,
+    DocumentRecord,
+    DocumentResearchRequest,
+    DocumentResearchResult,
+    ObservabilitySummary,
+    RunStatus,
+)
 from app.service import FinancialAnalysisService
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 service = FinancialAnalysisService()
 trace_store = InMemoryTraceStore()
+document_store = InMemoryDocumentStore()
 
 
 @app.get("/health")
@@ -55,6 +72,35 @@ async def observability_summary() -> ObservabilitySummary:
     return trace_store.summary()
 
 
+@app.post("/documents", response_model=DocumentRecord, status_code=status.HTTP_201_CREATED)
+async def upload_document(
+    file: UploadFile = File(...), ticker: str | None = Form(default=None)
+) -> DocumentRecord:
+    normalized_ticker = AssetRequest.normalize_ticker(ticker) if ticker else None
+    stored = ingest_document(
+        name=file.filename or "uploaded-document",
+        content_type=file.content_type or "application/octet-stream",
+        data=await file.read(),
+        ticker=normalized_ticker,
+    )
+    return document_store.save(stored)
+
+
+@app.get("/documents", response_model=list[DocumentRecord])
+async def list_documents() -> list[DocumentRecord]:
+    return document_store.list()
+
+
+@app.get("/documents/{document_id}", response_model=DocumentRecord)
+async def get_document(document_id: str) -> DocumentRecord:
+    return document_store.get(document_id).record
+
+
+@app.post("/research", response_model=DocumentResearchResult)
+async def research_documents(payload: DocumentResearchRequest) -> DocumentResearchResult:
+    return document_store.search(payload)
+
+
 @app.exception_handler(AssetNotFoundError)
 async def asset_not_found_handler(request: Request, exc: AssetNotFoundError) -> JSONResponse:
     return JSONResponse(
@@ -71,3 +117,18 @@ async def provider_timeout_handler(request: Request, exc: ProviderTimeoutError) 
         headers={"X-Run-ID": getattr(request.state, "run_id", "")},
         content={"error": "provider_timeout", "detail": str(exc)},
     )
+
+
+@app.exception_handler(DocumentNotFoundError)
+async def document_not_found_handler(request: Request, exc: DocumentNotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"error": "document_not_found", "detail": str(exc)})
+
+
+@app.exception_handler(UnsupportedDocumentError)
+async def unsupported_document_handler(request: Request, exc: UnsupportedDocumentError) -> JSONResponse:
+    return JSONResponse(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, content={"error": "unsupported_document", "detail": str(exc)})
+
+
+@app.exception_handler(InsufficientEvidenceError)
+async def insufficient_evidence_handler(request: Request, exc: InsufficientEvidenceError) -> JSONResponse:
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"error": "insufficient_evidence", "detail": str(exc)})

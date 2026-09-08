@@ -5,3 +5,14 @@ class AssetNotFoundError(Exception):
 class ProviderTimeoutError(Exception):
     """Raised when a data provider times out."""
 
+
+class DocumentNotFoundError(Exception):
+    """Raised when the requested document is unavailable."""
+
+
+class UnsupportedDocumentError(Exception):
+    """Raised when a document format cannot be extracted."""
+
+
+class InsufficientEvidenceError(Exception):
+    """Raised when a research question has no supporting document evidence."""

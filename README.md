@@ -76,6 +76,22 @@ A suíte versionada em `evals/cases.json` verifica respostas válidas, normaliza
 python scripts/run_evals.py
 ```
 
+## Financial Document Intelligence
+
+O agente aceita documentos PDF, CSV, TXT, Markdown e XLSX, extrai texto, classifica o conteúdo, identifica indicadores financeiros conhecidos e associa cada valor à sua página, planilha ou trecho de origem.
+
+```bash
+curl -X POST http://localhost:8000/documents \
+  -F 'ticker=PETR4' \
+  -F 'file=@relatorio-petr4.pdf'
+
+curl -X POST http://localhost:8000/research \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"PETR4","question":"Qual é a receita líquida informada?"}'
+```
+
+`POST /research` só responde quando encontra evidência extraída do documento; caso contrário retorna `422 insufficient_evidence`. Nesta fase, os documentos ficam em memória para demonstração local. A persistência e a busca semântica entram na próxima evolução.
+
 ## Docker
 
 ```bash
@@ -91,4 +107,3 @@ docker compose up --build
 5. Criar dataset de evals e testes contra números sem evidência.
 6. Ingerir relatórios financeiros com RAG e citações.
 7. Persistir traces e conectar a um provedor de observabilidade quando houver volume.
-

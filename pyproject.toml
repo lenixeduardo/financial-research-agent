@@ -5,8 +5,11 @@ description = "API educacional para análise financeira estruturada e rastreáve
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1",
+  "openpyxl>=3.1,<4",
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.5,<3",
+  "pypdf>=5,<7",
+  "python-multipart>=0.0.9,<1",
   "uvicorn[standard]>=0.30,<1",
 ]
 

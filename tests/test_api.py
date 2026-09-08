@@ -1,4 +1,7 @@
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
+
+from io import BytesIO
 
 from app.main import app
 
@@ -82,3 +85,77 @@ def test_observability_summary_is_available() -> None:
     body = response.json()
     assert body["total_runs"] >= 3
     assert 0 <= body["answer_rate"] <= 1
+
+
+def test_upload_extracts_fields_and_researches_with_citations() -> None:
+    response = client.post(
+        "/documents",
+        data={"ticker": "petr4"},
+        files={
+            "file": (
+                "petr4-results.txt",
+                "Relatório de resultados\nReceita líquida: R$ 490 milhões\nLucro líquido: R$ 82 milhões",
+                "text/plain",
+            )
+        },
+    )
+    assert response.status_code == 201
+    document = response.json()
+    assert document["ticker"] == "PETR4"
+    assert document["document_type"] == "financial_statement"
+    assert {field["name"] for field in document["extracted_fields"]} >= {
+        "revenue",
+        "net_income",
+    }
+
+    research = client.post(
+        "/research",
+        json={"ticker": "PETR4", "question": "Qual é a receita líquida informada?"},
+    )
+    assert research.status_code == 200
+    body = research.json()
+    assert body["citations"][0]["document_id"] == document["id"]
+    assert body["citations"][0]["location"] == "text"
+
+
+def test_upload_xlsx_extracts_spreadsheet_text() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "DRE"
+    worksheet.append(["Receita líquida", "Lucro líquido"])
+    worksheet.append(["R$ 120 milhões", "R$ 20 milhões"])
+    stream = BytesIO()
+    workbook.save(stream)
+
+    response = client.post(
+        "/documents",
+        files={
+            "file": (
+                "dre.xlsx",
+                stream.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["document_type"] == "spreadsheet"
+    assert body["page_count"] == 1
+
+
+def test_research_rejects_question_without_evidence() -> None:
+    response = client.post(
+        "/research",
+        json={"ticker": "PETR4", "question": "Qual foi o EBITDA ajustado trimestral?"},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"] == "insufficient_evidence"
+
+
+def test_rejects_unsupported_document_type() -> None:
+    response = client.post(
+        "/documents",
+        files={"file": ("report.docx", b"not a docx parser", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert response.status_code == 415
+    assert response.json()["error"] == "unsupported_document"

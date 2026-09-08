@@ -120,3 +120,55 @@ class ObservabilitySummary(BaseModel):
     tool_error_runs: int = Field(ge=0)
     answer_rate: float = Field(ge=0, le=1)
     average_latency_ms: float | None = Field(default=None, ge=0)
+
+
+class DocumentType(StrEnum):
+    FINANCIAL_STATEMENT = "financial_statement"
+    FINANCIAL_REPORT = "financial_report"
+    SPREADSHEET = "spreadsheet"
+    UNKNOWN = "unknown"
+
+
+class DocumentCitation(BaseModel):
+    document_id: str
+    document_name: str
+    location: str
+    excerpt: str
+
+
+class ExtractedField(BaseModel):
+    name: str
+    value: float
+    currency: str = "BRL"
+    citation: DocumentCitation
+
+
+class DocumentRecord(BaseModel):
+    id: str
+    name: str
+    content_type: str
+    ticker: str | None = None
+    document_type: DocumentType
+    page_count: int = Field(ge=1)
+    chunk_count: int = Field(ge=1)
+    extraction_confidence: float = Field(ge=0, le=1)
+    extracted_fields: list[ExtractedField]
+    source_sha256: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class DocumentResearchRequest(BaseModel):
+    ticker: str | None = Field(default=None, min_length=2, max_length=12)
+    question: str = Field(min_length=5, max_length=500)
+    document_id: str | None = None
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_optional_ticker(cls, value: str | None) -> str | None:
+        return AssetRequest.normalize_ticker(value) if value else None
+
+
+class DocumentResearchResult(BaseModel):
+    answer: str
+    confidence: float = Field(ge=0, le=1)
+    citations: list[DocumentCitation] = Field(min_length=1)
