@@ -85,3 +85,38 @@ class AnalysisResult(BaseModel):
     confidence: float = Field(ge=0, le=1)
     disclaimer: str = "Conteúdo educacional; não constitui recomendação de investimento."
 
+
+class RunStatus(StrEnum):
+    ANSWERED = "answered"
+    INSUFFICIENT_DATA = "insufficient_data"
+    TOOL_ERROR = "tool_error"
+
+
+class ToolCallTrace(BaseModel):
+    name: str
+    arguments: dict[str, str]
+    status: str
+    duration_ms: int = Field(ge=0)
+    error: str | None = None
+
+
+class AnalysisTrace(BaseModel):
+    run_id: str
+    ticker: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    status: RunStatus | None = None
+    tool_calls: list[ToolCallTrace] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    citations_count: int = Field(default=0, ge=0)
+    latency_ms: int | None = Field(default=None, ge=0)
+    error: str | None = None
+
+
+class ObservabilitySummary(BaseModel):
+    total_runs: int = Field(ge=0)
+    answered_runs: int = Field(ge=0)
+    insufficient_data_runs: int = Field(ge=0)
+    tool_error_runs: int = Field(ge=0)
+    answer_rate: float = Field(ge=0, le=1)
+    average_latency_ms: float | None = Field(default=None, ge=0)

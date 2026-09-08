@@ -12,7 +12,8 @@ Primeiro milestone de um sistema de pesquisa financeira rastreável, construído
 - Resultado estruturado e validado com Pydantic.
 - Fontes, timestamp, confiança, dados ausentes e disclaimer.
 - Erros tipados para ativo inexistente, validação e timeout.
-- Testes de unidade e integração.
+- Testes de unidade, integração e rastreamento de execuções.
+- Observabilidade local com ID de execução, ferramenta chamada, latência, fontes e classificação de falhas.
 - Execução local ou via Docker.
 
 ## Arquitetura
@@ -56,6 +57,25 @@ curl -X POST http://localhost:8000/analyses \
 pytest -q
 ```
 
+## Observabilidade
+
+Cada `POST /analyses` devolve o header `X-Run-ID`. As execuções recentes podem ser consultadas localmente:
+
+```bash
+curl http://localhost:8000/observability/runs
+curl http://localhost:8000/observability/summary
+```
+
+O armazenamento atual é limitado e fica em memória; serve para desenvolvimento e demonstração.
+
+## Avaliações
+
+A suíte versionada em `evals/cases.json` verifica respostas válidas, normalização, ativo inexistente, timeout e validação de entrada. Rode-a antes de alterar a rota, o provedor ou as regras de análise:
+
+```bash
+python scripts/run_evals.py
+```
+
 ## Docker
 
 ```bash
@@ -70,5 +90,5 @@ docker compose up --build
 4. Integrar LLM com structured output para interpretação.
 5. Criar dataset de evals e testes contra números sem evidência.
 6. Ingerir relatórios financeiros com RAG e citações.
-7. Adicionar tracing, custo e latência ao DataPulse/Arena.
+7. Persistir traces e conectar a um provedor de observabilidade quando houver volume.
 

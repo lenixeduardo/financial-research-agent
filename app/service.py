@@ -1,7 +1,11 @@
+from time import perf_counter
+
 from app.metrics import calculate_metrics
+from app.observability import add_tool_call
 from app.providers import MockFinancialDataProvider
 from app.schemas import (
     AnalysisResult,
+    AnalysisTrace,
     MetricStatus,
     RiskSeverity,
     RiskSignal,
@@ -12,8 +16,25 @@ class FinancialAnalysisService:
     def __init__(self, provider: MockFinancialDataProvider | None = None) -> None:
         self.provider = provider or MockFinancialDataProvider()
 
-    async def analyze(self, ticker: str) -> AnalysisResult:
-        profile, snapshot, source = await self.provider.get_asset(ticker)
+    async def analyze(self, ticker: str, trace: AnalysisTrace) -> AnalysisResult:
+        tool_started_at = perf_counter()
+        try:
+            profile, snapshot, source = await self.provider.get_asset(ticker)
+        except Exception as exc:
+            add_tool_call(
+                trace,
+                name="get_asset",
+                arguments={"ticker": ticker},
+                started_at=tool_started_at,
+                error=exc,
+            )
+            raise
+        add_tool_call(
+            trace,
+            name="get_asset",
+            arguments={"ticker": ticker},
+            started_at=tool_started_at,
+        )
         metrics = calculate_metrics(snapshot)
         negatives = [metric for metric in metrics if metric.status == MetricStatus.NEGATIVE]
         positives = [metric for metric in metrics if metric.status == MetricStatus.POSITIVE]
@@ -50,4 +71,3 @@ class FinancialAnalysisService:
             sources=[source],
             confidence=confidence,
         )
-

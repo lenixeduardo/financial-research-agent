@@ -1,0 +1,11 @@
+{
+  "suite": "financial-research-agent-baseline",
+  "version": "1.0.0",
+  "cases": [
+    {"id":"known-asset-petr4","payload":{"ticker":"PETR4"},"expected":{"http_status":200,"trace_status":"answered","source_required":true,"tool_status":"success"}},
+    {"id":"normalized-ticker-vale3","payload":{"ticker":" vale3 "},"expected":{"http_status":200,"ticker":"VALE3","trace_status":"answered","source_required":true,"tool_status":"success"}},
+    {"id":"unknown-asset","payload":{"ticker":"ABCD3"},"expected":{"http_status":404,"error":"asset_not_found","trace_status":"insufficient_data","tool_status":"error"}},
+    {"id":"provider-timeout","payload":{"ticker":"TIMEOUT"},"expected":{"http_status":504,"error":"provider_timeout","trace_status":"tool_error","tool_status":"error"}},
+    {"id":"invalid-ticker","payload":{"ticker":"$$$"},"expected":{"http_status":422}}
+  ]
+}
