@@ -27,5 +27,8 @@ jobs:
       - name: Test with coverage
         run: pytest -q --cov=app --cov-report=term-missing --cov-fail-under=80
 
-      - name: Versioned eval gate
+      - name: Versioned system eval gate
         run: python scripts/run_evals.py
+
+      - name: Retrieval quality gate
+        run: python scripts/run_retrieval_evals.py
