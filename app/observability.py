@@ -3,7 +3,15 @@ from datetime import UTC, datetime
 from time import perf_counter
 from uuid import uuid4
 
-from app.schemas import AnalysisTrace, ObservabilitySummary, RunStatus, ToolCallTrace
+from app.costs import TokenUsage, estimate_cost_usd
+from app.schemas import (
+    AgentStepTrace,
+    AnalysisTrace,
+    ModelUsageTrace,
+    ObservabilitySummary,
+    RunStatus,
+    ToolCallTrace,
+)
 
 
 class InMemoryTraceStore:
@@ -25,10 +33,13 @@ class InMemoryTraceStore:
         insufficient = sum(run.status == RunStatus.INSUFFICIENT_DATA for run in runs)
         tool_errors = sum(run.status == RunStatus.TOOL_ERROR for run in runs)
         completed_latencies = [run.latency_ms for run in runs if run.latency_ms is not None]
+        total_cost = round(sum(run.estimated_cost_usd for run in runs), 8)
+        answered_costs = [run.estimated_cost_usd for run in runs if run.status == RunStatus.ANSWERED]
         average_latency = (
-            sum(completed_latencies) / len(completed_latencies)
-            if completed_latencies
-            else None
+            sum(completed_latencies) / len(completed_latencies) if completed_latencies else None
+        )
+        average_answer_cost = (
+            round(sum(answered_costs) / len(answered_costs), 8) if answered_costs else None
         )
         return ObservabilitySummary(
             total_runs=total,
@@ -37,16 +48,14 @@ class InMemoryTraceStore:
             tool_error_runs=tool_errors,
             answer_rate=answered / total if total else 0,
             average_latency_ms=average_latency,
+            total_estimated_cost_usd=total_cost,
+            average_cost_per_answered_run_usd=average_answer_cost,
         )
 
 
 def start_trace(ticker: str) -> tuple[AnalysisTrace, float]:
     return (
-        AnalysisTrace(
-            run_id=str(uuid4()),
-            ticker=ticker,
-            started_at=datetime.now(UTC),
-        ),
+        AnalysisTrace(run_id=str(uuid4()), ticker=ticker, started_at=datetime.now(UTC)),
         perf_counter(),
     )
 
@@ -68,6 +77,44 @@ def add_tool_call(
             error=str(error) if error else None,
         )
     )
+
+
+def add_agent_step(
+    trace: AnalysisTrace,
+    *,
+    name: str,
+    started_at: float,
+    status: str = "success",
+    details: dict[str, str | int | float | bool] | None = None,
+) -> None:
+    trace.agent_steps.append(
+        AgentStepTrace(
+            name=name,
+            status=status,
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            details=details or {},
+        )
+    )
+
+
+def add_model_usage(
+    trace: AnalysisTrace,
+    *,
+    model: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    usage = TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+    cost = estimate_cost_usd(usage)
+    trace.model_usage.append(
+        ModelUsageTrace(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=cost,
+        )
+    )
+    trace.estimated_cost_usd = round(trace.estimated_cost_usd + cost, 8)
 
 
 def finish_trace(
