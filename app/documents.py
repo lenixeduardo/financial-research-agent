@@ -10,7 +10,9 @@ from uuid import uuid4
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
+from app.config import settings
 from app.errors import DocumentNotFoundError, InsufficientEvidenceError, UnsupportedDocumentError
+from app.retrieval import hybrid_rank, tokenize
 from app.schemas import (
     DocumentCitation,
     DocumentRecord,
@@ -44,7 +46,7 @@ class _StoredDocument:
 
 
 class InMemoryDocumentStore:
-    """Bounded document store for development; replace with durable storage in production."""
+    """Bounded development store with a production-like hybrid retrieval contract."""
 
     def __init__(self, max_documents: int = 100) -> None:
         self._documents: deque[_StoredDocument] = deque(maxlen=max_documents)
@@ -69,32 +71,43 @@ class InMemoryDocumentStore:
         if request.ticker:
             candidates = [item for item in candidates if item.record.ticker == request.ticker]
 
-        terms = _search_terms(request.question)
-        matches: list[tuple[int, _StoredDocument, _Chunk]] = []
+        keyed_chunks: dict[str, tuple[_StoredDocument, _Chunk]] = {}
+        searchable: list[tuple[str, str]] = []
         for document in candidates:
-            for chunk in document.chunks:
-                score = sum(term in chunk.text.casefold() for term in terms)
-                if score:
-                    matches.append((score, document, chunk))
-        matches.sort(key=lambda item: item[0], reverse=True)
-        if not matches:
+            for index, chunk in enumerate(document.chunks):
+                key = f"{document.record.id}:{index}"
+                keyed_chunks[key] = (document, chunk)
+                searchable.append((key, chunk.text))
+
+        ranked = hybrid_rank(
+            request.question,
+            searchable,
+            top_k=settings.retrieval_top_k,
+            min_score=settings.retrieval_min_score,
+        )
+        if not ranked:
             raise InsufficientEvidenceError("no document evidence supports this question")
 
-        selected = matches[:3]
-        citations = [
-            DocumentCitation(
-                document_id=document.record.id,
-                document_name=document.record.name,
-                location=chunk.location,
-                excerpt=_excerpt(chunk.text, terms),
+        terms = set(tokenize(request.question))
+        citations: list[DocumentCitation] = []
+        for match in ranked[:3]:
+            document, chunk = keyed_chunks[match.key]
+            citations.append(
+                DocumentCitation(
+                    document_id=document.record.id,
+                    document_name=document.record.name,
+                    location=chunk.location,
+                    excerpt=_excerpt(chunk.text, terms),
+                    score=match.combined_score,
+                )
             )
-            for _, document, chunk in selected
-        ]
         sources = ", ".join(f"{citation.document_name} ({citation.location})" for citation in citations)
+        confidence = min(0.97, 0.45 + 0.5 * ranked[0].combined_score)
         return DocumentResearchResult(
             answer=f"Foram encontradas evidências documentais relevantes em {sources}.",
-            confidence=min(0.95, 0.5 + 0.15 * selected[0][0]),
+            confidence=confidence,
             citations=citations,
+            retrieval_method="hybrid_bm25_hash_embedding_mmr",
         )
 
 
@@ -217,10 +230,6 @@ def _parse_number(value: str) -> float:
     else:
         normalized = normalized.replace(" ", "")
     return float(normalized) * multiplier
-
-
-def _search_terms(question: str) -> set[str]:
-    return {term for term in re.findall(r"[\wÀ-ÿ]{3,}", question.casefold())}
 
 
 def _excerpt(text: str, terms: set[str], length: int = 280) -> str:
