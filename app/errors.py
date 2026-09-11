@@ -16,3 +16,7 @@ class UnsupportedDocumentError(Exception):
 
 class InsufficientEvidenceError(Exception):
     """Raised when a research question has no supporting document evidence."""
+
+
+class SecurityPolicyError(Exception):
+    """Raised when an input violates deterministic safety guardrails."""
