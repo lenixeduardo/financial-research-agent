@@ -1,38 +1,61 @@
 # Financial Research Agent
 
-Primeiro milestone de um sistema de pesquisa financeira rastreável, construído com Python, FastAPI e Pydantic.
+Case de **AI Engineering aplicado a finanças**: pesquisa documental com evidências, dados de mercado via tool calling, cálculos determinísticos, model routing, verificação independente, observabilidade, evals e unit economics.
 
-> Projeto educacional. Não fornece recomendação de investimento.
+> Projeto educacional. Não constitui recomendação de investimento.
 
-## O que já funciona
+## O que este case demonstra
 
-- `POST /analyses` recebe e normaliza um ticker.
-- Provedor mockado reproduzível para PETR4 e VALE3.
-- Cinco indicadores calculados em Python, sem delegar matemática a um LLM.
-- Resultado estruturado e validado com Pydantic.
-- Fontes, timestamp, confiança, dados ausentes e disclaimer.
-- Erros tipados para ativo inexistente, validação e timeout.
-- Testes de unidade, integração e rastreamento de execuções.
-- Observabilidade local com ID de execução, ferramenta chamada, latência, fontes e classificação de falhas.
-- Execução local ou via Docker.
+- **Tool calling real** via `FinancialDataProvider`, com adapter BRAPI e mock determinístico para testes.
+- **RAG com citations** para PDF, CSV, TXT, Markdown e XLSX.
+- **Hybrid retrieval**: BM25-style lexical score + dense feature hashing determinístico + MMR-like reranking.
+- **Provenance** em fontes, documentos, localização e score de recuperação.
+- **Agent workflow**: `research_agent -> financial_analysis_agent -> verifier`.
+- **Model routing** por tipo/complexidade de tarefa, com política separada para verificação.
+- **Structured output** com Pydantic.
+- **Deterministic financial math**: o modelo não calcula os índices financeiros.
+- **Verifier** para fontes, métricas, confiança e evidências de risco.
+- **Observability** com `run_id`, tool calls, agent steps, latency, model policy e custo estimado.
+- **Unit economics**: custo total e custo médio por execução respondida.
+- **Guardrails**: limite de upload e bloqueio determinístico de padrões óbvios de prompt injection.
+- **Versioned evals** + testes + cobertura + lint executados como gate no GitHub Actions.
+- **Architecture Decision Records** documentando decisões técnicas.
 
 ## Arquitetura
 
 ```text
-Request
-  ↓
+                       Financial Research Agent
+
+Client
+  |
+  v
 FastAPI + Pydantic
-  ↓
-FinancialAnalysisService
-  ├── FinancialDataProvider
-  └── Deterministic Metrics
-  ↓
-AnalysisResult
+  |
+  +------------------------+-------------------------+
+  |                        |                         |
+  v                        v                         v
+Documents              Analyses                 Observability
+  |                        |                         |
+Parsing                  Research Agent           Traces
+  |                        |                         |
+Chunking                  Tool Call                Costs
+  |                        |                         |
+Hybrid Retrieval       BRAPI / Mock              Latency
+BM25 + dense + MMR         |
+  |                    Deterministic Metrics
+Citations                   |
+                           Model Router
+                              |
+                    Financial Analysis Agent
+                              |
+                         Independent Verifier
+                              |
+                       Structured Output
 ```
 
-O LLM será adicionado na próxima etapa somente para interpretar dados já calculados. Ele não será responsável por realizar a matemática financeira.
+Detalhes: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-## Executar localmente
+## Rodar localmente
 
 ```bash
 python -m venv .venv
@@ -41,9 +64,46 @@ pip install -e '.[dev]'
 uvicorn app.main:app --reload
 ```
 
-A documentação interativa estará em `http://localhost:8000/docs`.
+Windows PowerShell:
 
-## Exemplo
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e '.[dev]'
+uvicorn app.main:app --reload
+```
+
+Swagger: `http://localhost:8000/docs`
+
+## Dados reais com BRAPI
+
+O mock permanece como padrão para desenvolvimento reproduzível. Para usar BRAPI:
+
+```bash
+cp env.example .env
+```
+
+```env
+FRA_FINANCIAL_PROVIDER=brapi
+FRA_BRAPI_TOKEN=seu_token_quando_necessario
+```
+
+A interface do domínio não muda ao trocar o provider.
+
+## Endpoints principais
+
+```text
+GET  /health
+GET  /system/capabilities
+POST /analyses
+POST /documents
+GET  /documents
+POST /research
+GET  /observability/runs
+GET  /observability/summary
+```
+
+Exemplo:
 
 ```bash
 curl -X POST http://localhost:8000/analyses \
@@ -51,59 +111,68 @@ curl -X POST http://localhost:8000/analyses \
   -d '{"ticker":"PETR4"}'
 ```
 
-## Testes
+Cada análise devolve `X-Run-ID`, permitindo localizar todo o trace da execução.
 
-```bash
-pytest -q
-```
-
-## Observabilidade
-
-Cada `POST /analyses` devolve o header `X-Run-ID`. As execuções recentes podem ser consultadas localmente:
-
-```bash
-curl http://localhost:8000/observability/runs
-curl http://localhost:8000/observability/summary
-```
-
-O armazenamento atual é limitado e fica em memória; serve para desenvolvimento e demonstração.
-
-## Avaliações
-
-A suíte versionada em `evals/cases.json` verifica respostas válidas, normalização, ativo inexistente, timeout e validação de entrada. Rode-a antes de alterar a rota, o provedor ou as regras de análise:
-
-```bash
-python scripts/run_evals.py
-```
-
-## Financial Document Intelligence
-
-O agente aceita documentos PDF, CSV, TXT, Markdown e XLSX, extrai texto, classifica o conteúdo, identifica indicadores financeiros conhecidos e associa cada valor à sua página, planilha ou trecho de origem.
+## Document Intelligence / RAG
 
 ```bash
 curl -X POST http://localhost:8000/documents \
   -F 'ticker=PETR4' \
-  -F 'file=@relatorio-petr4.pdf'
+  -F 'file=@relatorio.pdf'
 
 curl -X POST http://localhost:8000/research \
   -H 'Content-Type: application/json' \
   -d '{"ticker":"PETR4","question":"Qual é a receita líquida informada?"}'
 ```
 
-`POST /research` só responde quando encontra evidência extraída do documento; caso contrário retorna `422 insufficient_evidence`. Nesta fase, os documentos ficam em memória para demonstração local. A persistência e a busca semântica entram na próxima evolução.
+Uma resposta de research inclui `citations`, `location`, `excerpt`, `score` e `retrieval_method`. Quando não existe evidência suficiente, o sistema retorna `422 insufficient_evidence` em vez de fabricar uma resposta.
 
-## Docker
+## Testes, evals e CI
 
 ```bash
-docker compose up --build
+ruff check app tests scripts
+pytest -q --cov=app --cov-report=term-missing
+python scripts/run_evals.py
 ```
 
-## Próximos milestones
+O workflow `.github/workflows/ci.yml` executa lint, testes com threshold de cobertura e a suíte versionada de evals em pull requests.
 
-1. Conectar um provedor real atrás da mesma interface.
-2. Persistir análises em PostgreSQL.
-3. Adicionar Redis e execução assíncrona.
-4. Integrar LLM com structured output para interpretação.
-5. Criar dataset de evals e testes contra números sem evidência.
-6. Ingerir relatórios financeiros com RAG e citações.
-7. Persistir traces e conectar a um provedor de observabilidade quando houver volume.
+A avaliação produz métricas agregadas de pass rate e verifica, além do contrato HTTP, provenance, verification, traces e model routing.
+
+## Observabilidade e unit economics
+
+```bash
+curl http://localhost:8000/observability/runs
+curl http://localhost:8000/observability/summary
+```
+
+O trace registra:
+
+```text
+run_id
+status
+latency_ms
+tool_calls[]
+agent_steps[]
+model_usage[]
+sources[]
+citations_count
+estimated_cost_usd
+```
+
+Os preços por milhão de tokens são configuráveis por ambiente, permitindo trocar implementações determinísticas por modelos reais sem alterar o contrato de observabilidade.
+
+## Decisões de engenharia
+
+- [`ADR 001 — Hybrid retrieval`](docs/adr/001-hybrid-retrieval.md)
+- [`ADR 002 — Deterministic math + verification`](docs/adr/002-deterministic-math-and-verification.md)
+
+## Limites atuais — declarados de propósito
+
+Este repositório **não finge infraestrutura que não existe**. Atualmente documentos e traces ficam em memória; os identificadores de modelo representam a política de routing, mas o pipeline financeiro segue determinístico e não reporta tokens fictícios.
+
+Próximas extensões de produção: PostgreSQL + pgvector, trace backend OpenTelemetry/Langfuse-compatible, workers assíncronos, OIDC/RBAC e adapters para modelos hosted/local. Essas extensões já possuem pontos de substituição claros na arquitetura.
+
+## Por que isto é um case de AI Engineering
+
+O objetivo não é demonstrar apenas uma chamada para LLM. O case mostra como construir um sistema onde **dados, tools, retrieval, evidência, routing, verificação, qualidade, segurança, observabilidade e custo** são componentes testáveis e substituíveis. O modelo é uma peça do sistema — não o sistema inteiro.

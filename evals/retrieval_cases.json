@@ -1,0 +1,16 @@
+{
+  "name": "financial-retrieval-baseline",
+  "corpus": [
+    {"id": "revenue", "text": "A companhia reportou receita líquida de R$ 490 milhões no período."},
+    {"id": "net_income", "text": "O lucro líquido consolidado foi de R$ 82 milhões."},
+    {"id": "debt", "text": "A dívida total encerrou o período em R$ 280 milhões."},
+    {"id": "equity", "text": "O patrimônio líquido somou R$ 390 milhões."},
+    {"id": "governance", "text": "O relatório descreve práticas de governança e composição do conselho."}
+  ],
+  "cases": [
+    {"query": "qual foi a receita líquida?", "relevant_id": "revenue"},
+    {"query": "quanto foi o lucro líquido?", "relevant_id": "net_income"},
+    {"query": "qual o valor da dívida total?", "relevant_id": "debt"},
+    {"query": "informe o patrimônio líquido", "relevant_id": "equity"}
+  ]
+}

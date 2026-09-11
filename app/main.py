@@ -8,8 +8,10 @@ from app.errors import (
     DocumentNotFoundError,
     InsufficientEvidenceError,
     ProviderTimeoutError,
+    SecurityPolicyError,
     UnsupportedDocumentError,
 )
+from app.guardrails import assess_research_question, validate_document_size
 from app.observability import InMemoryTraceStore, finish_trace, start_trace
 from app.schemas import (
     AnalysisResult,
@@ -32,6 +34,19 @@ document_store = InMemoryDocumentStore()
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": settings.app_version}
+
+
+@app.get("/system/capabilities")
+async def capabilities() -> dict[str, object]:
+    return {
+        "provider": settings.financial_provider,
+        "hybrid_retrieval": True,
+        "model_routing": True,
+        "verification": True,
+        "cost_tracking": True,
+        "prompt_injection_guardrails": True,
+        "supported_documents": ["pdf", "csv", "txt", "md", "xlsx"],
+    }
 
 
 @app.post("/analyses", response_model=AnalysisResult)
@@ -77,10 +92,12 @@ async def upload_document(
     file: UploadFile = File(...), ticker: str | None = Form(default=None)
 ) -> DocumentRecord:
     normalized_ticker = AssetRequest.normalize_ticker(ticker) if ticker else None
+    data = await file.read()
+    validate_document_size(data)
     stored = ingest_document(
         name=file.filename or "uploaded-document",
         content_type=file.content_type or "application/octet-stream",
-        data=await file.read(),
+        data=data,
         ticker=normalized_ticker,
     )
     return document_store.save(stored)
@@ -98,6 +115,9 @@ async def get_document(document_id: str) -> DocumentRecord:
 
 @app.post("/research", response_model=DocumentResearchResult)
 async def research_documents(payload: DocumentResearchRequest) -> DocumentResearchResult:
+    allowed, reasons = assess_research_question(payload.question)
+    if not allowed:
+        raise SecurityPolicyError(f"research question blocked by guardrail: {','.join(reasons)}")
     return document_store.search(payload)
 
 
@@ -121,14 +141,31 @@ async def provider_timeout_handler(request: Request, exc: ProviderTimeoutError) 
 
 @app.exception_handler(DocumentNotFoundError)
 async def document_not_found_handler(request: Request, exc: DocumentNotFoundError) -> JSONResponse:
-    return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"error": "document_not_found", "detail": str(exc)})
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"error": "document_not_found", "detail": str(exc)},
+    )
 
 
 @app.exception_handler(UnsupportedDocumentError)
 async def unsupported_document_handler(request: Request, exc: UnsupportedDocumentError) -> JSONResponse:
-    return JSONResponse(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, content={"error": "unsupported_document", "detail": str(exc)})
+    return JSONResponse(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        content={"error": "unsupported_document", "detail": str(exc)},
+    )
 
 
 @app.exception_handler(InsufficientEvidenceError)
 async def insufficient_evidence_handler(request: Request, exc: InsufficientEvidenceError) -> JSONResponse:
-    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"error": "insufficient_evidence", "detail": str(exc)})
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"error": "insufficient_evidence", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(SecurityPolicyError)
+async def security_policy_handler(request: Request, exc: SecurityPolicyError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"error": "security_policy", "detail": str(exc)},
+    )

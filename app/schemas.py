@@ -73,6 +73,12 @@ class DataSource(BaseModel):
     is_mock: bool = True
 
 
+class VerificationResult(BaseModel):
+    passed: bool
+    checks: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AnalysisResult(BaseModel):
     ticker: str
     company_name: str
@@ -83,6 +89,7 @@ class AnalysisResult(BaseModel):
     missing_information: list[str]
     sources: list[DataSource]
     confidence: float = Field(ge=0, le=1)
+    verification: VerificationResult | None = None
     disclaimer: str = "Conteúdo educacional; não constitui recomendação de investimento."
 
 
@@ -100,6 +107,20 @@ class ToolCallTrace(BaseModel):
     error: str | None = None
 
 
+class AgentStepTrace(BaseModel):
+    name: str
+    status: str
+    duration_ms: int = Field(ge=0)
+    details: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+
+class ModelUsageTrace(BaseModel):
+    model: str
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    estimated_cost_usd: float = Field(default=0, ge=0)
+
+
 class AnalysisTrace(BaseModel):
     run_id: str
     ticker: str
@@ -107,9 +128,12 @@ class AnalysisTrace(BaseModel):
     completed_at: datetime | None = None
     status: RunStatus | None = None
     tool_calls: list[ToolCallTrace] = Field(default_factory=list)
+    agent_steps: list[AgentStepTrace] = Field(default_factory=list)
+    model_usage: list[ModelUsageTrace] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
     citations_count: int = Field(default=0, ge=0)
     latency_ms: int | None = Field(default=None, ge=0)
+    estimated_cost_usd: float = Field(default=0, ge=0)
     error: str | None = None
 
 
@@ -120,6 +144,8 @@ class ObservabilitySummary(BaseModel):
     tool_error_runs: int = Field(ge=0)
     answer_rate: float = Field(ge=0, le=1)
     average_latency_ms: float | None = Field(default=None, ge=0)
+    total_estimated_cost_usd: float = Field(default=0, ge=0)
+    average_cost_per_answered_run_usd: float | None = Field(default=None, ge=0)
 
 
 class DocumentType(StrEnum):
@@ -134,6 +160,7 @@ class DocumentCitation(BaseModel):
     document_name: str
     location: str
     excerpt: str
+    score: float | None = Field(default=None, ge=0)
 
 
 class ExtractedField(BaseModel):
@@ -172,3 +199,4 @@ class DocumentResearchResult(BaseModel):
     answer: str
     confidence: float = Field(ge=0, le=1)
     citations: list[DocumentCitation] = Field(min_length=1)
+    retrieval_method: str = "hybrid"
