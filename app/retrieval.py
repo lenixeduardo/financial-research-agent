@@ -1,3 +1,4 @@
+import hashlib
 import math
 import re
 from collections import Counter
@@ -20,18 +21,21 @@ def tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.casefold())
 
 
-def _hashed_embedding(text: str, dimensions: int = 96) -> list[float]:
-    """Dependency-free semantic-ish embedding for local/dev retrieval.
+def _stable_hash(value: str) -> int:
+    return int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest()[:8], "big")
 
-    It intentionally uses signed feature hashing so the retrieval pipeline is fully
-    reproducible in tests. A production embedding provider can replace this behind
-    the same scoring contract without changing document search.
+
+def _hashed_embedding(text: str, dimensions: int = 96) -> list[float]:
+    """Dependency-free deterministic feature-hashed embedding for local/dev retrieval.
+
+    This gives the repository a reproducible dense-retrieval path without requiring
+    an external model during tests. A production embedding provider can replace this
+    behind the same ranking contract.
     """
     vector = [0.0] * dimensions
-    tokens = tokenize(text)
-    for token in tokens:
-        idx = hash(token) % dimensions
-        sign = 1.0 if hash(f"sign:{token}") % 2 == 0 else -1.0
+    for token in tokenize(text):
+        idx = _stable_hash(token) % dimensions
+        sign = 1.0 if _stable_hash(f"sign:{token}") % 2 == 0 else -1.0
         vector[idx] += sign
     norm = math.sqrt(sum(value * value for value in vector))
     return [value / norm for value in vector] if norm else vector
@@ -99,7 +103,7 @@ def hybrid_rank(
 
 
 def _diversify(candidates: list[RetrievalCandidate], *, top_k: int) -> list[RetrievalCandidate]:
-    """Lightweight MMR-like reranking to avoid near-duplicate chunks."""
+    """Lightweight MMR-like reranking to reduce near-duplicate chunks."""
     selected: list[RetrievalCandidate] = []
     remaining = list(candidates)
     while remaining and len(selected) < top_k:
