@@ -199,3 +199,4 @@ class DocumentResearchResult(BaseModel):
     answer: str
     confidence: float = Field(ge=0, le=1)
     citations: list[DocumentCitation] = Field(min_length=1)
+    retrieval_method: str = "hybrid"
