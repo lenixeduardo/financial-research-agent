@@ -1,7 +1,7 @@
 from time import perf_counter
 
-from app.config import settings
 from app.metrics import calculate_metrics
+from app.model_router import ModelTask, router
 from app.observability import add_agent_step, add_model_usage, add_tool_call
 from app.providers import FinancialDataProvider, build_financial_provider
 from app.schemas import (
@@ -56,6 +56,10 @@ class FinancialAnalysisService:
         metrics = calculate_metrics(snapshot)
         negatives = [metric for metric in metrics if metric.status == MetricStatus.NEGATIVE]
         positives = [metric for metric in metrics if metric.status == MetricStatus.POSITIVE]
+        known_metrics = sum(metric.value is not None for metric in metrics)
+        completeness = known_metrics / len(metrics) if metrics else 0.0
+        complexity = 1.0 - completeness / 2
+        analysis_model = router.route(ModelTask.ANALYSIS, complexity=complexity)
 
         risks = [
             RiskSignal(
@@ -67,13 +71,11 @@ class FinancialAnalysisService:
             for metric in negatives
             if metric.value is not None
         ]
-
         summary = (
             f"{profile.company_name} possui {len(positives)} indicador(es) positivo(s), "
             f"{len(negatives)} negativo(s) e os demais neutros ou indisponíveis."
         )
-        known_metrics = sum(metric.value is not None for metric in metrics)
-        confidence = 0.9 if known_metrics == len(metrics) else max(0.45, known_metrics / len(metrics))
+        confidence = 0.9 if known_metrics == len(metrics) else max(0.45, completeness)
 
         result = AnalysisResult(
             ticker=profile.ticker,
@@ -82,9 +84,7 @@ class FinancialAnalysisService:
             metrics=metrics,
             risks=risks,
             positive_signals=[metric.interpretation for metric in positives],
-            missing_information=[
-                metric.name for metric in metrics if metric.value is None
-            ],
+            missing_information=[metric.name for metric in metrics if metric.value is None],
             sources=[source],
             confidence=confidence,
         )
@@ -92,10 +92,17 @@ class FinancialAnalysisService:
             trace,
             name="financial_analysis_agent",
             started_at=analysis_started_at,
-            details={"metrics": len(metrics), "risks": len(risks), "confidence": confidence},
+            details={
+                "metrics": len(metrics),
+                "risks": len(risks),
+                "confidence": confidence,
+                "routed_model": analysis_model.model,
+            },
         )
+        add_model_usage(trace, model=analysis_model.model, input_tokens=0, output_tokens=0)
 
         verifier_started_at = perf_counter()
+        verifier_model = router.route(ModelTask.VERIFICATION)
         result.verification = verify_analysis(result)
         add_agent_step(
             trace,
@@ -105,9 +112,8 @@ class FinancialAnalysisService:
             details={
                 "checks": len(result.verification.checks),
                 "warnings": len(result.verification.warnings),
+                "routed_model": verifier_model.model,
             },
         )
-
-        # The current pipeline is deterministic; this field is already wired for future LLM stages.
-        add_model_usage(trace, model=settings.default_model, input_tokens=0, output_tokens=0)
+        add_model_usage(trace, model=verifier_model.model, input_tokens=0, output_tokens=0)
         return result
