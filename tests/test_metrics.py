@@ -48,3 +48,25 @@ def test_missing_pe_becomes_unknown() -> None:
     assert metric.value is None
     assert metric.status == MetricStatus.UNKNOWN
 
+
+def test_missing_provider_values_do_not_turn_into_zero_metrics() -> None:
+    metrics = calculate_metrics(
+        FinancialSnapshot(
+            revenue=120.0,
+            previous_revenue=None,
+            net_income=None,
+            equity=80.0,
+            total_debt=None,
+            market_price=30.0,
+            earnings_per_share=None,
+        )
+    )
+    by_name = {metric.name: metric for metric in metrics}
+
+    assert by_name["revenue_growth"].value is None
+    assert by_name["net_margin"].value is None
+    assert by_name["debt_to_equity"].value is None
+    assert by_name["roe"].value is None
+    assert by_name["price_to_earnings"].value is None
+    assert all(metric.status == MetricStatus.UNKNOWN for metric in metrics)
+
