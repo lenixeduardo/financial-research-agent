@@ -8,6 +8,7 @@ Case de **AI Engineering aplicado a finanças**: pesquisa documental com evidên
 
 - **Tool calling real** via `FinancialDataProvider`, com adapter BRAPI e mock determinístico para testes.
 - **RAG com citations** para PDF, CSV, TXT, Markdown e XLSX.
+- **Evidence scope isolation** por `document_id`, `document_ids` ou `corpus_id`, evitando misturar relatórios diferentes que compartilham o mesmo ticker.
 - **Hybrid retrieval**: BM25-style lexical score + dense feature hashing determinístico + MMR-like reranking.
 - **Provenance** em fontes, documentos, localização e score de recuperação.
 - **Agent workflow**: `research_agent -> financial_analysis_agent -> verifier`.
@@ -17,7 +18,7 @@ Case de **AI Engineering aplicado a finanças**: pesquisa documental com evidên
 - **Verifier** para fontes, métricas, confiança e evidências de risco.
 - **Observability** com `run_id`, tool calls, agent steps, latency, model policy e custo estimado.
 - **Unit economics**: custo total e custo médio por execução respondida.
-- **Guardrails**: limite de upload e bloqueio determinístico de padrões óbvios de prompt injection.
+- **Guardrails**: limite de upload, bloqueio determinístico de prompt injection direto e detecção de instruções maliciosas embutidas em documentos.
 - **Versioned evals** + testes + cobertura + lint executados como gate no GitHub Actions.
 - **Architecture Decision Records** documentando decisões técnicas.
 
@@ -118,14 +119,17 @@ Cada análise devolve `X-Run-ID`, permitindo localizar todo o trace da execuçã
 ```bash
 curl -X POST http://localhost:8000/documents \
   -F 'ticker=PETR4' \
+  -F 'corpus_id=petrobras-2t26' \
   -F 'file=@relatorio.pdf'
 
 curl -X POST http://localhost:8000/research \
   -H 'Content-Type: application/json' \
-  -d '{"ticker":"PETR4","question":"Qual é a receita líquida informada?"}'
+  -d '{"corpus_id":"petrobras-2t26","ticker":"PETR4","question":"Qual é a receita líquida informada?"}'
 ```
 
 Uma resposta de research inclui `citations`, `location`, `excerpt`, `score` e `retrieval_method`. Quando não existe evidência suficiente, o sistema retorna `422 insufficient_evidence` em vez de fabricar uma resposta.
+
+Para impedir mistura acidental de evidências, uma pesquisa apenas por `ticker` retorna `409 ambiguous_document_scope` quando existem múltiplos documentos compatíveis. Nesse caso, use `document_id`, `document_ids` ou um `corpus_id` explícito.
 
 ## Testes, evals e CI
 
@@ -169,7 +173,7 @@ Os preços por milhão de tokens são configuráveis por ambiente, permitindo tr
 
 ## Limites atuais — declarados de propósito
 
-Este repositório **não finge infraestrutura que não existe**. Atualmente documentos e traces ficam em memória; os identificadores de modelo representam a política de routing, mas o pipeline financeiro segue determinístico e não reporta tokens fictícios.
+Este repositório **não finge infraestrutura que não existe**. Atualmente documentos e traces ficam em memória; os identificadores de modelo representam a política de routing, mas o pipeline financeiro segue determinístico e não reporta tokens fictícios. Mesmo nesse modo local, a API agora exige escopo explícito quando um ticker possui mais de um documento e mantém campos ausentes do provedor como `unknown`, em vez de convertê-los silenciosamente para zero.
 
 Próximas extensões de produção: PostgreSQL + pgvector, trace backend OpenTelemetry/Langfuse-compatible, workers assíncronos, OIDC/RBAC e adapters para modelos hosted/local. Essas extensões já possuem pontos de substituição claros na arquitetura.
 
