@@ -6,8 +6,16 @@ class ProviderTimeoutError(Exception):
     """Raised when a data provider times out."""
 
 
+class ProviderResponseError(Exception):
+    """Raised when an upstream provider returns an invalid or unusable response."""
+
+
 class DocumentNotFoundError(Exception):
     """Raised when the requested document is unavailable."""
+
+
+class AmbiguousDocumentScopeError(Exception):
+    """Raised when a research request can match multiple document scopes."""
 
 
 class UnsupportedDocumentError(Exception):
