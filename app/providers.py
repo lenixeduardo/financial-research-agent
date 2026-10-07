@@ -4,7 +4,7 @@ from typing import Protocol
 import httpx
 
 from app.config import settings
-from app.errors import AssetNotFoundError, ProviderTimeoutError
+from app.errors import AssetNotFoundError, ProviderResponseError, ProviderTimeoutError
 from app.schemas import CompanyProfile, DataSource, FinancialSnapshot
 
 
@@ -24,6 +24,7 @@ class BrapiFinancialDataProvider:
         if settings.brapi_token:
             params["token"] = settings.brapi_token
         url = f"{settings.brapi_base_url.rstrip('/')}/v2/stocks/quote"
+
         try:
             async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
                 response = await client.get(url, params=params)
@@ -33,23 +34,45 @@ class BrapiFinancialDataProvider:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 raise AssetNotFoundError(f"asset {ticker} was not found") from exc
-            raise ProviderTimeoutError(
+            raise ProviderResponseError(
                 f"BRAPI returned HTTP {exc.response.status_code}"
             ) from exc
+        except httpx.RequestError as exc:
+            raise ProviderResponseError(f"BRAPI request failed: {exc}") from exc
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ProviderResponseError("BRAPI returned malformed JSON") from exc
+
+        if not isinstance(payload, dict):
+            raise ProviderResponseError("BRAPI returned an unexpected response shape")
+
         results = payload.get("results") or []
+        if not isinstance(results, list):
+            raise ProviderResponseError("BRAPI response field 'results' is not a list")
         if not results:
             raise AssetNotFoundError(f"asset {ticker} was not found")
-        raw = results[0]
-        data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
 
-        def number(*keys: str, default: float = 0.0) -> float:
+        raw = results[0]
+        if not isinstance(raw, dict):
+            raise ProviderResponseError("BRAPI returned an invalid asset payload")
+        nested = raw.get("data")
+        data = nested if isinstance(nested, dict) else raw
+
+        def number(*keys: str) -> float | None:
             for key in keys:
                 value = data.get(key)
+                if isinstance(value, bool):
+                    continue
                 if isinstance(value, (int, float)):
                     return float(value)
-            return default
+                if isinstance(value, str):
+                    try:
+                        return float(value.replace(",", "."))
+                    except ValueError:
+                        continue
+            return None
 
         profile = CompanyProfile(
             ticker=str(data.get("symbol") or ticker).upper(),

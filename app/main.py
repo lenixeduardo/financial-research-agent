@@ -1,12 +1,16 @@
+from uuid import uuid4
+
 from fastapi import FastAPI, File, Form, Request, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.documents import InMemoryDocumentStore, ingest_document
 from app.errors import (
+    AmbiguousDocumentScopeError,
     AssetNotFoundError,
     DocumentNotFoundError,
     InsufficientEvidenceError,
+    ProviderResponseError,
     ProviderTimeoutError,
     SecurityPolicyError,
     UnsupportedDocumentError,
@@ -45,6 +49,8 @@ async def capabilities() -> dict[str, object]:
         "verification": True,
         "cost_tracking": True,
         "prompt_injection_guardrails": True,
+        "indirect_prompt_injection_guardrails": True,
+        "document_scope_isolation": True,
         "supported_documents": ["pdf", "csv", "txt", "md", "xlsx"],
     }
 
@@ -61,7 +67,7 @@ async def create_analysis(
         finish_trace(trace, started_at=started_at, status=RunStatus.INSUFFICIENT_DATA, error=exc)
         trace_store.save(trace)
         raise
-    except ProviderTimeoutError as exc:
+    except (ProviderTimeoutError, ProviderResponseError) as exc:
         finish_trace(trace, started_at=started_at, status=RunStatus.TOOL_ERROR, error=exc)
         trace_store.save(trace)
         raise
@@ -89,9 +95,15 @@ async def observability_summary() -> ObservabilitySummary:
 
 @app.post("/documents", response_model=DocumentRecord, status_code=status.HTTP_201_CREATED)
 async def upload_document(
-    file: UploadFile = File(...), ticker: str | None = Form(default=None)
+    file: UploadFile = File(...),
+    ticker: str | None = Form(default=None),
+    corpus_id: str | None = Form(default=None),
 ) -> DocumentRecord:
     normalized_ticker = AssetRequest.normalize_ticker(ticker) if ticker else None
+    normalized_corpus_id = corpus_id.strip() if corpus_id else str(uuid4())
+    if not normalized_corpus_id or len(normalized_corpus_id) > 128:
+        raise SecurityPolicyError("corpus_id must contain between 1 and 128 characters")
+
     data = await file.read()
     validate_document_size(data)
     stored = ingest_document(
@@ -99,6 +111,7 @@ async def upload_document(
         content_type=file.content_type or "application/octet-stream",
         data=data,
         ticker=normalized_ticker,
+        corpus_id=normalized_corpus_id,
     )
     return document_store.save(stored)
 
@@ -139,11 +152,30 @@ async def provider_timeout_handler(request: Request, exc: ProviderTimeoutError) 
     )
 
 
+@app.exception_handler(ProviderResponseError)
+async def provider_response_handler(request: Request, exc: ProviderResponseError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        headers={"X-Run-ID": getattr(request.state, "run_id", "")},
+        content={"error": "provider_response_error", "detail": str(exc)},
+    )
+
+
 @app.exception_handler(DocumentNotFoundError)
 async def document_not_found_handler(request: Request, exc: DocumentNotFoundError) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content={"error": "document_not_found", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(AmbiguousDocumentScopeError)
+async def ambiguous_document_scope_handler(
+    request: Request, exc: AmbiguousDocumentScopeError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"error": "ambiguous_document_scope", "detail": str(exc)},
     )
 
 
@@ -158,7 +190,7 @@ async def unsupported_document_handler(request: Request, exc: UnsupportedDocumen
 @app.exception_handler(InsufficientEvidenceError)
 async def insufficient_evidence_handler(request: Request, exc: InsufficientEvidenceError) -> JSONResponse:
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"error": "insufficient_evidence", "detail": str(exc)},
     )
 

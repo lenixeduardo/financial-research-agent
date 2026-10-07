@@ -1,14 +1,20 @@
 from app.schemas import FinancialMetric, FinancialSnapshot, MetricStatus
 
 
-def safe_divide(numerator: float, denominator: float) -> float | None:
-    return None if denominator == 0 else numerator / denominator
+def safe_divide(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def safe_growth(current: float | None, previous: float | None) -> float | None:
+    if current is None or previous is None or previous == 0:
+        return None
+    return (current - previous) / previous
 
 
 def calculate_metrics(snapshot: FinancialSnapshot) -> list[FinancialMetric]:
-    revenue_growth = safe_divide(
-        snapshot.revenue - snapshot.previous_revenue, snapshot.previous_revenue
-    )
+    revenue_growth = safe_growth(snapshot.revenue, snapshot.previous_revenue)
     net_margin = safe_divide(snapshot.net_income, snapshot.revenue)
     debt_to_equity = safe_divide(snapshot.total_debt, snapshot.equity)
     roe = safe_divide(snapshot.net_income, snapshot.equity)
@@ -85,4 +91,3 @@ def _inverse_threshold_status(
     if value > negative:
         return MetricStatus.NEGATIVE
     return MetricStatus.NEUTRAL
-

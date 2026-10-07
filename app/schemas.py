@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MetricStatus(StrEnum):
@@ -42,13 +42,13 @@ class CompanyProfile(BaseModel):
 
 
 class FinancialSnapshot(BaseModel):
-    revenue: float
-    previous_revenue: float
-    net_income: float
-    equity: float
-    total_debt: float
-    market_price: float
-    earnings_per_share: float
+    revenue: float | None = None
+    previous_revenue: float | None = None
+    net_income: float | None = None
+    equity: float | None = None
+    total_debt: float | None = None
+    market_price: float | None = None
+    earnings_per_share: float | None = None
 
 
 class FinancialMetric(BaseModel):
@@ -172,6 +172,7 @@ class ExtractedField(BaseModel):
 
 class DocumentRecord(BaseModel):
     id: str
+    corpus_id: str
     name: str
     content_type: str
     ticker: str | None = None
@@ -188,11 +189,26 @@ class DocumentResearchRequest(BaseModel):
     ticker: str | None = Field(default=None, min_length=2, max_length=12)
     question: str = Field(min_length=5, max_length=500)
     document_id: str | None = None
+    document_ids: list[str] = Field(default_factory=list, max_length=50)
+    corpus_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("ticker")
     @classmethod
     def normalize_optional_ticker(cls, value: str | None) -> str | None:
         return AssetRequest.normalize_ticker(value) if value else None
+
+    @field_validator("document_ids")
+    @classmethod
+    def deduplicate_document_ids(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @model_validator(mode="after")
+    def require_research_scope(self) -> "DocumentResearchRequest":
+        if not (self.document_id or self.document_ids or self.corpus_id or self.ticker):
+            raise ValueError(
+                "research requires document_id, document_ids, corpus_id or ticker to define a scope"
+            )
+        return self
 
 
 class DocumentResearchResult(BaseModel):

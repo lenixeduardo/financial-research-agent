@@ -5,13 +5,21 @@ import re
 from collections import deque
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from threading import RLock
 from uuid import uuid4
 
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
 from app.config import settings
-from app.errors import DocumentNotFoundError, InsufficientEvidenceError, UnsupportedDocumentError
+from app.errors import (
+    AmbiguousDocumentScopeError,
+    DocumentNotFoundError,
+    InsufficientEvidenceError,
+    SecurityPolicyError,
+    UnsupportedDocumentError,
+)
+from app.guardrails import assess_untrusted_document_text
 from app.retrieval import hybrid_rank, tokenize
 from app.schemas import (
     DocumentCitation,
@@ -46,30 +54,73 @@ class _StoredDocument:
 
 
 class InMemoryDocumentStore:
-    """Bounded development store with a production-like hybrid retrieval contract."""
+    """Bounded development store with explicit research scoping.
+
+    The store is process-local by design, but requests cannot silently mix
+    unrelated documents that merely share a ticker. Callers can target one or
+    more document ids, or intentionally group documents with a corpus_id.
+    """
 
     def __init__(self, max_documents: int = 100) -> None:
         self._documents: deque[_StoredDocument] = deque(maxlen=max_documents)
+        self._lock = RLock()
 
     def save(self, document: _StoredDocument) -> DocumentRecord:
-        self._documents.append(document)
+        with self._lock:
+            self._documents.append(document)
         return document.record
 
     def list(self) -> list[DocumentRecord]:
-        return [item.record for item in reversed(self._documents)]
+        with self._lock:
+            return [item.record for item in reversed(self._documents)]
 
     def get(self, document_id: str) -> _StoredDocument:
-        for document in self._documents:
-            if document.record.id == document_id:
-                return document
+        with self._lock:
+            for document in self._documents:
+                if document.record.id == document_id:
+                    return document
         raise DocumentNotFoundError(f"document {document_id} was not found")
 
     def search(self, request: DocumentResearchRequest) -> DocumentResearchResult:
-        candidates = list(self._documents)
+        with self._lock:
+            all_documents = list(self._documents)
+
+        requested_ids = list(request.document_ids)
         if request.document_id:
-            candidates = [self.get(request.document_id)]
+            requested_ids.insert(0, request.document_id)
+        requested_ids = list(dict.fromkeys(requested_ids))
+
+        if requested_ids:
+            by_id = {item.record.id: item for item in all_documents}
+            missing = [document_id for document_id in requested_ids if document_id not in by_id]
+            if missing:
+                raise DocumentNotFoundError(
+                    f"document(s) not found: {', '.join(missing)}"
+                )
+            candidates = [by_id[document_id] for document_id in requested_ids]
+        else:
+            candidates = all_documents
+
+        if request.corpus_id:
+            candidates = [
+                item for item in candidates if item.record.corpus_id == request.corpus_id
+            ]
         if request.ticker:
             candidates = [item for item in candidates if item.record.ticker == request.ticker]
+
+        if not candidates:
+            raise InsufficientEvidenceError("no documents exist in the requested research scope")
+
+        if (
+            not requested_ids
+            and not request.corpus_id
+            and request.ticker
+            and len(candidates) > 1
+        ):
+            raise AmbiguousDocumentScopeError(
+                "multiple documents match this ticker; provide document_id, document_ids "
+                "or corpus_id to prevent cross-document evidence mixing"
+            )
 
         keyed_chunks: dict[str, tuple[_StoredDocument, _Chunk]] = {}
         searchable: list[tuple[str, str]] = []
@@ -101,7 +152,9 @@ class InMemoryDocumentStore:
                     score=match.combined_score,
                 )
             )
-        sources = ", ".join(f"{citation.document_name} ({citation.location})" for citation in citations)
+        sources = ", ".join(
+            f"{citation.document_name} ({citation.location})" for citation in citations
+        )
         confidence = min(0.97, 0.45 + 0.5 * ranked[0].combined_score)
         return DocumentResearchResult(
             answer=f"Foram encontradas evidências documentais relevantes em {sources}.",
@@ -117,6 +170,7 @@ def ingest_document(
     content_type: str,
     data: bytes,
     ticker: str | None,
+    corpus_id: str,
 ) -> _StoredDocument:
     suffix = PurePosixPath(name).suffix.casefold()
     if suffix not in SUPPORTED_SUFFIXES:
@@ -128,6 +182,14 @@ def ingest_document(
     if not non_empty_pages:
         raise UnsupportedDocumentError("the document has no extractable text")
 
+    combined_text = "\n".join(text for _, text in non_empty_pages)
+    safe, reasons = assess_untrusted_document_text(combined_text)
+    if not safe:
+        raise SecurityPolicyError(
+            "uploaded document contains instruction-like prompt injection patterns: "
+            + ",".join(reasons)
+        )
+
     document_id = str(uuid4())
     chunks = _chunk_pages(non_empty_pages)
     document_type = _classify_document(suffix, "\n".join(text for _, text in non_empty_pages))
@@ -135,6 +197,7 @@ def ingest_document(
     confidence = 0.9 if fields else 0.7
     record = DocumentRecord(
         id=document_id,
+        corpus_id=corpus_id,
         name=name,
         content_type=content_type or "application/octet-stream",
         ticker=ticker,

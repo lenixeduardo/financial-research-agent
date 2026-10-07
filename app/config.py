@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "Financial Research Agent"
-    app_version: str = "0.3.0"
+    app_version: str = "0.3.1"
 
     # Data provider
     financial_provider: str = "mock"

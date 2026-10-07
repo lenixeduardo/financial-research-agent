@@ -49,7 +49,7 @@ FastAPI + Pydantic validation
 
 ## Design principles
 
-1. **Evidence before narrative**: source provenance and citations are first-class data.
+1. **Evidence before narrative**: source provenance and citations are first-class data; research is explicitly scoped by document ids or corpus to prevent cross-document evidence leakage.
 2. **Deterministic math**: ratios are calculated in Python, never delegated to an LLM.
 3. **Explicit routing**: tasks choose a model policy through `ModelRouter`; provider-specific model calls can be added behind the policy without changing domain code.
 4. **Independent verification**: the verifier has a separate routing policy and checks provenance, finite metrics, confidence consistency and risk evidence.
@@ -57,13 +57,14 @@ FastAPI + Pydantic validation
 6. **Failure is observable**: tool errors, insufficient data, latency and run status are captured in a trace.
 7. **Quality is executable**: tests and versioned evals run in CI and can block regressions.
 8. **Economics are measurable**: token usage and estimated cost are modeled per run even when local deterministic implementations report zero tokens.
-9. **Guardrails are outside prompts**: upload limits and obvious prompt-injection patterns are enforced before retrieval.
+9. **Guardrails are outside prompts**: upload limits, direct prompt-injection checks and high-confidence indirect injection patterns in uploaded documents are enforced before retrieval.
+10. **Missing data is not zero**: unavailable upstream financial fields remain `None` and propagate to `unknown` metrics rather than producing misleading ratios.
 
 ## Production extension points
 
 The repository intentionally keeps development storage in memory so it can run locally with no infrastructure. Production evolution should replace these interfaces, not rewrite the domain flow:
 
-- document store -> PostgreSQL + pgvector or managed vector DB
+- document store -> PostgreSQL + pgvector or managed vector DB (preserving `corpus_id` / tenant scoping)
 - trace store -> OpenTelemetry/Langfuse-compatible backend
 - deterministic dense retrieval -> hosted/local embedding provider
 - synchronous request path -> queue + workers for long-running analyses
